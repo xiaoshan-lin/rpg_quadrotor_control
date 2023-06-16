@@ -6,6 +6,7 @@
 #include <thread>
 
 #include <geometry_msgs/PoseStamped.h>
+#include <std_msgs/Bool.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <nav_msgs/Odometry.h>
 #include <position_controller/position_controller.h>
@@ -117,6 +118,7 @@ class AutoPilot {
 
   ros::Publisher control_command_pub_;
   ros::Publisher autopilot_feedback_pub_;
+  ros::Publisher status_pub_;
 
   ros::Subscriber state_estimate_sub_;
   ros::Subscriber low_level_feedback_sub_;
@@ -211,6 +213,7 @@ class AutoPilot {
   double control_command_input_timeout_;
   bool enable_command_feedthrough_;
   double predictive_control_lookahead_;
+  std_msgs::Bool status_msg;
 
   // Constants
   static constexpr double kVelocityCommandZeroThreshold_ = 0.03;

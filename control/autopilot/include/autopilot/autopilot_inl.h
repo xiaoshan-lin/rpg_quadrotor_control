@@ -58,8 +58,11 @@ AutoPilot<Tcontroller, Tparams>::AutoPilot(const ros::NodeHandle& nh,
   // Publishers
   control_command_pub_ =
       nh_.advertise<quadrotor_msgs::ControlCommand>("control_command", 1);
+
   autopilot_feedback_pub_ =
       nh_.advertise<quadrotor_msgs::AutopilotFeedback>("autopilot/feedback", 1);
+
+  status_pub_ = nh_.advertise<std_msgs::Bool>("autopilot/status", 1);
 
   // Subscribers
   state_estimate_sub_ =
@@ -320,7 +323,7 @@ void AutoPilot<Tcontroller, Tparams>::stateEstimateCallback(
   if (destructor_invoked_) {
     return;
   }
-
+  
   std::lock_guard<std::mutex> main_lock(main_mutex_);
 
   received_state_est_ = quadrotor_common::QuadStateEstimate(*msg);
@@ -349,10 +352,12 @@ void AutoPilot<Tcontroller, Tparams>::stateEstimateCallback(
   ros::Time command_execution_time =
       wall_time_now + ros::Duration(control_command_delay_);
 
+
   quadrotor_common::QuadStateEstimate predicted_state = received_state_est_;
   if (autopilot_state_ != States::OFF) {
     // If the autopilot is OFF we don't need to predict
     predicted_state = getPredictedStateEstimate(command_execution_time);
+    //std::cout<<"----predicted state:"<<predicted_state.position<<std::endl;
   }
 
   ros::Duration trajectory_execution_left_duration(0.0);
@@ -531,6 +536,7 @@ void AutoPilot<Tcontroller, Tparams>::velocityCommandCallback(
 template <typename Tcontroller, typename Tparams>
 void AutoPilot<Tcontroller, Tparams>::referenceStateCallback(
     const quadrotor_msgs::TrajectoryPoint::ConstPtr& msg) {
+  ROS_INFO("-----Reference call back-----");
   if (destructor_invoked_) {
     return;
   }
@@ -616,6 +622,16 @@ void AutoPilot<Tcontroller, Tparams>::trajectoryCallback(
     if ((trajectory_queue_.back().points.back().position -
          quadrotor_common::geometryToEigen(msg->points.front().pose.position))
             .norm() > kPositionJumpTolerance_) {
+      std::cout<<"last position = ";
+      std::cout<<trajectory_queue_.back().points.back().position<<std::endl;
+      std::cout<<"new position = ";
+      std::cout<<quadrotor_common::geometryToEigen(msg->points.front().pose.position)<<std::endl;
+      std::cout<<"tolerance = "<<kPositionJumpTolerance_<<"\n";
+      std::cout<<"jump = ";
+      std::cout<<(trajectory_queue_.back().points.back().position -
+         quadrotor_common::geometryToEigen(msg->points.front().pose.position))
+            .norm()<<"\n";
+      ROS_INFO("---------------------------");
       ROS_WARN(
           "[%s] Received trajectory has a too large jump from the last "
           "trajectory in the queue, will ignore trajectory",
@@ -725,7 +741,7 @@ void AutoPilot<Tcontroller, Tparams>::forceHoverCallback(
   ROS_INFO_THROTTLE(0.5, "[%s] FORCE HOVER command received",
                     pnh_.getNamespace().c_str());
 
-  if (autopilot_state_ == States::OFF || autopilot_state_ == States::HOVER ||
+  if (autopilot_state_ == States::HOVER ||
       autopilot_state_ == States::EMERGENCY_LAND ||
       autopilot_state_ == States::RC_MANUAL) {
     return;
@@ -782,6 +798,7 @@ void AutoPilot<Tcontroller, Tparams>::offCallback(
 template <typename Tcontroller, typename Tparams>
 quadrotor_common::ControlCommand AutoPilot<Tcontroller, Tparams>::start(
     const quadrotor_common::QuadStateEstimate& state_estimate) {
+  //ROS_INFO("----- AutoPilot::Start ----");
   quadrotor_common::ControlCommand command;
 
   if (first_time_in_new_state_) {
@@ -824,7 +841,7 @@ quadrotor_common::ControlCommand AutoPilot<Tcontroller, Tparams>::start(
       }
     }
   }
-
+  //std::cout<<"reference state:("<<reference_state_.position<<")"<<std::endl;
   reference_trajectory_ = quadrotor_common::Trajectory(reference_state_);
   command = base_controller_.run(state_estimate, reference_trajectory_,
                                  base_controller_params_);
@@ -835,6 +852,7 @@ quadrotor_common::ControlCommand AutoPilot<Tcontroller, Tparams>::start(
 template <typename Tcontroller, typename Tparams>
 quadrotor_common::ControlCommand AutoPilot<Tcontroller, Tparams>::hover(
     const quadrotor_common::QuadStateEstimate& state_estimate) {
+  //ROS_INFO("----- AutoPilot::Hover ----");
   if (first_time_in_new_state_) {
     first_time_in_new_state_ = false;
     // We can only enter HOVER mode from breaking unless breaking is not
@@ -852,12 +870,15 @@ quadrotor_common::ControlCommand AutoPilot<Tcontroller, Tparams>::hover(
   const quadrotor_common::ControlCommand command = base_controller_.run(
       state_estimate, reference_trajectory_, base_controller_params_);
 
+  //std::cout<<"reference state:("<<reference_state_.position<<")"<<std::endl;
+
   return command;
 }
 
 template <typename Tcontroller, typename Tparams>
 quadrotor_common::ControlCommand AutoPilot<Tcontroller, Tparams>::land(
     const quadrotor_common::QuadStateEstimate& state_estimate) {
+  //ROS_INFO("----- AutoPilot::Land ----");
   quadrotor_common::ControlCommand command;
 
   if (first_time_in_new_state_) {
@@ -879,6 +900,7 @@ quadrotor_common::ControlCommand AutoPilot<Tcontroller, Tparams>::land(
   reference_trajectory_ = quadrotor_common::Trajectory(reference_state_);
   command = base_controller_.run(state_estimate, reference_trajectory_,
                                  base_controller_params_);
+  //std::cout<<"reference state:("<<reference_state_.position<<")"<<std::endl;
 
   if (received_state_est_.coordinate_frame ==
           quadrotor_common::QuadStateEstimate::CoordinateFrame::WORLD ||
@@ -1063,12 +1085,14 @@ AutoPilot<Tcontroller, Tparams>::executeTrajectory(
     const quadrotor_common::QuadStateEstimate& state_estimate,
     ros::Duration* trajectory_execution_left_duration,
     int* trajectories_left_in_queue) {
+  ROS_INFO_ONCE("Executing Trajectories");
+
   const ros::Time time_now = ros::Time::now();
   if (first_time_in_new_state_) {
     first_time_in_new_state_ = false;
     time_start_trajectory_execution_ = time_now;
   }
-
+  
   if (trajectory_queue_.empty()) {
     ROS_ERROR(
         "[%s] Trajectory queue was unexpectedly emptied, going back to HOVER",
@@ -1085,14 +1109,18 @@ AutoPilot<Tcontroller, Tparams>::executeTrajectory(
   if ((time_now - time_start_trajectory_execution_) >
       trajectory_queue_.front().points.back().time_from_start) {
     if (trajectory_queue_.size() == 1) {
+      
       // This was the last trajectory in the queue -> go back to hover
       reference_state_ = trajectory_queue_.back().points.back();
       *trajectory_execution_left_duration = ros::Duration(0.0);
       *trajectories_left_in_queue = 0;
       trajectory_queue_.pop_front();
+      status_msg.data = true;
+      status_pub_.publish(status_msg);
       setAutoPilotStateForced(States::HOVER);
 
       reference_trajectory_ = quadrotor_common::Trajectory(reference_state_);
+
       return base_controller_.run(state_estimate, reference_trajectory_,
                                   base_controller_params_);
     } else {
@@ -1155,7 +1183,6 @@ AutoPilot<Tcontroller, Tparams>::executeTrajectory(
 
   const quadrotor_common::ControlCommand command = base_controller_.run(
       state_estimate, reference_trajectory_, base_controller_params_);
-
   return command;
 }
 
@@ -1249,6 +1276,7 @@ void AutoPilot<Tcontroller, Tparams>::setAutoPilotStateForced(
   }
   ROS_INFO("[%s] Switched to %s state", pnh_.getNamespace().c_str(),
            state_name.c_str());
+  
 }
 
 template <typename Tcontroller, typename Tparams>
